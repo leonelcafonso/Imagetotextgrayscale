@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Imagem Binária (TXT)</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            margin: 0;
+        }
+
+        .container {
+            max-width: 600px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card {
+            background: #1e293b;
+            padding: 25px;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        h2 { margin-top: 0; color: #38bdf8; font-size: 1.2rem; }
+        p { font-size: 0.9rem; color: #94a3b8; margin-bottom: 20px; }
+
+        input[type="file"] { display: none; }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 20px;
+            background-color: #38bdf8;
+            color: #0f172a;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            text-align: center;
+            transition: background 0.2s;
+        }
+
+        .btn:hover { background-color: #7dd3fc; }
+
+        .btn-secondary { background-color: #475569; color: white; }
+        .btn-secondary:hover { background-color: #64748b; }
+
+        #output-canvas {
+            margin-top: 20px;
+            border: 2px solid #334155;
+            border-radius: 8px;
+            max-width: 100%;
+            background-color: #000;
+        }
+        
+        .hidden { display: none; }
+
+        .status {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="card">
+            <h2>1. Encodificador (Imagem -> TXT)</h2>
+            <p>Selecione uma foto para transformá-la num arquivo de dados de 256 cores.</p>
+            
+            <label for="imgToTxt" class="btn">Selecionar Foto e Baixar TXT</label>
+            <input type="file" id="imgToTxt" accept="image/*">
+            <div id="encodeStatus" class="status"></div>
+        </div>
+
+        <div class="card">
+            <h2>2. Decodificador (TXT -> Imagem)</h2>
+            <p>Faça o upload do arquivo .txt gerado para reconstruir a imagem na tela.</p>
+            
+            <label for="txtToImg" class="btn btn-secondary">Selecionar Arquivo .txt</label>
+            <input type="file" id="txtToImg" accept=".txt">
+            <div id="decodeStatus" class="status"></div>
+            
+            <canvas id="output-canvas" class="hidden"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const MAX_WIDTH = 300; 
+
+        // =====================================
+        // ENCODIFICADOR: Salva a Imagem
+        // =====================================
+        const imgInput = document.getElementById('imgToTxt');
+        const encodeStatus = document.getElementById('encodeStatus');
+
+        imgInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    
+                    const scale = MAX_WIDTH / img.width;
+                    canvas.width = MAX_WIDTH;
+                    canvas.height = Math.floor(img.height * scale); // Garante números inteiros
+
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const pixels = imageData.data;
+
+                    // 1. Cria o cabeçalho em texto e converte para Bytes
+                    const headerStr = `${canvas.width},${canvas.height}|`;
+                    const headerBytes = new TextEncoder().encode(headerStr);
+                    
+                    // 2. Extrai os bytes da imagem
+                    const bodyBytes = new Uint8Array(canvas.width * canvas.height);
+                    for (let i = 0; i < pixels.length; i += 4) {
+                        const r = pixels[i];
+                        const g = pixels[i+1];
+                        const b = pixels[i+2];
+                        bodyBytes[i / 4] = Math.floor(r * 0.299 + g * 0.587 + b * 0.114);
+                    }
+
+                    // 3. Junta tudo num único array de bytes (Muito mais seguro do que converter para string!)
+                    const finalFileBytes = new Uint8Array(headerBytes.length + bodyBytes.length);
+                    finalFileBytes.set(headerBytes, 0); // Coloca o cabeçalho no início
+                    finalFileBytes.set(bodyBytes, headerBytes.length); // Coloca os pixels logo após o cabeçalho
+
+                    // Cria o download direto do array de bytes
+                    const blob = new Blob([finalFileBytes], { type: 'text/plain' });
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    link.download = "minha_imagem_byte.txt";
+                    link.click();
+
+                    encodeStatus.textContent = "Sucesso! O download começou.";
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // =====================================
+        // DECODIFICADOR: Reconstrói a Imagem
+        // =====================================
+        const txtInput = document.getElementById('txtToImg');
+        const decodeStatus = document.getElementById('decodeStatus');
+        const outputCanvas = document.getElementById('output-canvas');
+        const outCtx = outputCanvas.getContext('2d');
+
+        txtInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                // Lemos o arquivo bruto
+                const arrayBuffer = event.target.result;
+                const bytes = new Uint8Array(arrayBuffer);
+                
+                // 1. Encontra onde acaba o cabeçalho (O primeiro código 124 = '|')
+                let delimiterIndex = -1;
+                for (let i = 0; i < bytes.length; i++) {
+                    if (bytes[i] === 124) { 
+                        delimiterIndex = i;
+                        break; // Para no primeiro que achar! Ignora os da imagem.
+                    }
+                }
+
+                if (delimiterIndex === -1) {
+                    alert("Arquivo TXT inválido ou corrompido!");
+                    return;
+                }
+
+                // 2. Lê apenas o cabeçalho para saber largura e altura
+                let headerStr = "";
+                for (let i = 0; i < delimiterIndex; i++) {
+                    headerStr += String.fromCharCode(bytes[i]);
+                }
+
+                const dimensions = headerStr.split(',');
+                const width = parseInt(dimensions[0]);
+                const height = parseInt(dimensions[1]);
+
+                outputCanvas.width = width;
+                outputCanvas.height = height;
+
+                const newImageData = outCtx.createImageData(width, height);
+                const data = newImageData.data;
+
+                // 3. Lê os pixels a partir de onde o cabeçalho terminou
+                let pixelIndex = delimiterIndex + 1;
+
+                for (let i = 0; i < (width * height); i++) {
+                    // Prevenção de travamento se o arquivo for menor que o esperado
+                    if (pixelIndex >= bytes.length) break;
+
+                    const colorValue = bytes[pixelIndex++];
+                    const idx = i * 4;
+                    data[idx]     = colorValue; // R
+                    data[idx + 1] = colorValue; // G
+                    data[idx + 2] = colorValue; // B
+                    data[idx + 3] = 255;        // Opacidade 100%
+                }
+
+                outputCanvas.classList.remove('hidden');
+                outCtx.putImageData(newImageData, 0, 0);
+                
+                decodeStatus.textContent = `Imagem reconstruída com perfeição: ${width}x${height} pixels.`;
+            };
+            // ArrayBuffer nos dá acesso à matemática pura sem corromper caracteres
+            reader.readAsArrayBuffer(file); 
+        });
+    </script>
+</body>
+</html>
